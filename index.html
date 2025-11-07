@@ -1,0 +1,536 @@
+import React, { useMemo, useState } from "react";
+
+// ==========================
+// BaZi Helper Data & Logic
+// ==========================
+
+// Heavenly Stems (天干) & Earthly Branches (地支)
+const STEMS = [
+  "甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸",
+] as const;
+const BRANCHES = [
+  "子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥",
+] as const;
+
+type Stem = typeof STEMS[number];
+type Branch = typeof BRANCHES[number];
+
+// 五行映射 (for Heavenly Stems)
+const STEM_ELEMENT: Record<Stem, "木" | "火" | "土" | "金" | "水"> = {
+  "甲": "木",
+  "乙": "木",
+  "丙": "火",
+  "丁": "火",
+  "戊": "土",
+  "己": "土",
+  "庚": "金",
+  "辛": "金",
+  "壬": "水",
+  "癸": "水",
+};
+
+// 阴阳 (Yin/Yang) for stems (optional display)
+const STEM_YINYANG: Record<Stem, "阳" | "阴"> = {
+  "甲": "阳",
+  "乙": "阴",
+  "丙": "阳",
+  "丁": "阴",
+  "戊": "阳",
+  "己": "阴",
+  "庚": "阳",
+  "辛": "阴",
+  "壬": "阳",
+  "癸": "阴",
+};
+
+// 支藏 (Hidden stems inside each branch) with weights approximated to 1.0
+// 常用配置（三藏 0.5/0.3/0.2；二藏 0.7/0.3；一藏 1.0）
+const HIDDEN_STEMS: Record<Branch, Array<{ stem: Stem; weight: number }>> = {
+  "子": [{ stem: "癸", weight: 1.0 }],
+  "丑": [
+    { stem: "己", weight: 0.5 },
+    { stem: "癸", weight: 0.3 },
+    { stem: "辛", weight: 0.2 },
+  ],
+  "寅": [
+    { stem: "甲", weight: 0.5 },
+    { stem: "丙", weight: 0.3 },
+    { stem: "戊", weight: 0.2 },
+  ],
+  "卯": [{ stem: "乙", weight: 1.0 }],
+  "辰": [
+    { stem: "戊", weight: 0.5 },
+    { stem: "乙", weight: 0.3 },
+    { stem: "癸", weight: 0.2 },
+  ],
+  "巳": [
+    { stem: "丙", weight: 0.5 },
+    { stem: "庚", weight: 0.3 },
+    { stem: "戊", weight: 0.2 },
+  ],
+  "午": [
+    { stem: "丁", weight: 0.7 },
+    { stem: "己", weight: 0.3 },
+  ],
+  "未": [
+    { stem: "己", weight: 0.5 },
+    { stem: "乙", weight: 0.3 },
+    { stem: "丁", weight: 0.2 },
+  ],
+  "申": [
+    { stem: "庚", weight: 0.5 },
+    { stem: "壬", weight: 0.3 },
+    { stem: "戊", weight: 0.2 },
+  ],
+  "酉": [{ stem: "辛", weight: 1.0 }],
+  "戌": [
+    { stem: "戊", weight: 0.5 },
+    { stem: "辛", weight: 0.3 },
+    { stem: "丁", weight: 0.2 },
+  ],
+  "亥": [
+    { stem: "壬", weight: 0.7 },
+    { stem: "甲", weight: 0.3 },
+  ],
+};
+
+// 辅助：把天干映射到五行计分
+const elementOfStem = (s: Stem) => STEM_ELEMENT[s];
+
+// 以日支所属三合局来定若干神煞
+// 四组三合局：寅午戌(火局)、申子辰(水局)、巳酉丑(金局)、亥卯未(木局)
+// 桃花：火局→卯；水局→酉；金局→午；木局→子
+const TAOHUA_BY_GROUP: Record<"火" | "水" | "金" | "木", Branch> = {
+  "火": "卯",
+  "水": "酉",
+  "金": "午",
+  "木": "子",
+};
+// 驿马：火局→申；水局→寅；金局→亥；木局→巳
+const YIMA_BY_GROUP: Record<"火" | "水" | "金" | "木", Branch> = {
+  "火": "申",
+  "水": "寅",
+  "金": "亥",
+  "木": "巳",
+};
+// 将星：火局→午；水局→子；金局→酉；木局→卯
+const JIANGXING_BY_GROUP: Record<"火" | "水" | "金" | "木", Branch> = {
+  "火": "午",
+  "水": "子",
+  "金": "酉",
+  "木": "卯",
+};
+
+// 根据日支判断所属三合局元素
+const GROUP_OF_DAY_BRANCH: Record<Branch, "火" | "水" | "金" | "木"> = {
+  "寅": "火",
+  "午": "火",
+  "戌": "火",
+  "申": "水",
+  "子": "水",
+  "辰": "水",
+  "巳": "金",
+  "酉": "金",
+  "丑": "金",
+  "亥": "木",
+  "卯": "木",
+  "未": "木",
+};
+
+// 天乙贵人（常用映射，按日干取贵人地支）
+const TIAN_YI_GUI_REN: Record<Stem, Branch[]> = {
+  "甲": ["丑", "未"],
+  "乙": ["子", "申"],
+  "丙": ["亥", "酉"],
+  "丁": ["亥", "酉"],
+  "戊": ["丑", "未"],
+  "己": ["子", "申"],
+  "庚": ["寅", "午"],
+  "辛": ["寅", "午"],
+  "壬": ["卯", "巳"],
+  "癸": ["卯", "巳"],
+};
+
+// ==========================
+// UI Component
+// ==========================
+
+type Pillar = { stem: Stem | ""; branch: Branch | "" };
+
+type Chart = {
+  year: Pillar;
+  month: Pillar;
+  day: Pillar; // 日主以日干为主
+  hour: Pillar;
+};
+
+const initialChart: Chart = {
+  year: { stem: "", branch: "" },
+  month: { stem: "", branch: "" },
+  day: { stem: "甲", branch: "子" },
+  hour: { stem: "", branch: "" },
+};
+
+const SelectBox = <T extends string>({
+  label,
+  value,
+  onChange,
+  options,
+  placeholder,
+}: {
+  label: string;
+  value: T | "";
+  onChange: (v: T | "") => void;
+  options: readonly T[];
+  placeholder?: string;
+}) => (
+  <div className="flex flex-col gap-1">
+    <label className="text-sm text-slate-600">{label}</label>
+    <select
+      className="rounded-xl border px-3 py-2 shadow-sm outline-none focus:ring-2"
+      value={value}
+      onChange={(e) => onChange(e.target.value as T)}
+    >
+      <option value="">{placeholder ?? "请选择"}</option>
+      {options.map((op) => (
+        <option key={op} value={op}>
+          {op}
+        </option>
+      ))}
+    </select>
+  </div>
+);
+
+function useFiveElementScore(chart: Chart) {
+  return useMemo(() => {
+    const score: Record<"木" | "火" | "土" | "金" | "水", number> = {
+      "木": 0,
+      "火": 0,
+      "土": 0,
+      "金": 0,
+      "水": 0,
+    };
+
+    // 天干计分：四柱各 1 分
+    ([chart.year.stem, chart.month.stem, chart.day.stem, chart.hour.stem] as const)
+      .filter((s): s is Stem => !!s)
+      .forEach((s) => {
+        const el = elementOfStem(s);
+        score[el] += 1;
+      });
+
+    // 地支计分：按支藏权重折算到相应五行
+    ([chart.year.branch, chart.month.branch, chart.day.branch, chart.hour.branch] as const)
+      .filter((b): b is Branch => !!b)
+      .forEach((b) => {
+        HIDDEN_STEMS[b].forEach(({ stem, weight }) => {
+          score[elementOfStem(stem)] += weight;
+        });
+      });
+
+    const total = Object.values(score).reduce((a, b) => a + b, 0);
+    const percent: Record<keyof typeof score, number> = {
+      "木": total ? (score["木"] / total) * 100 : 0,
+      "火": total ? (score["火"] / total) * 100 : 0,
+      "土": total ? (score["土"] / total) * 100 : 0,
+      "金": total ? (score["金"] / total) * 100 : 0,
+      "水": total ? (score["水"] / total) * 100 : 0,
+    };
+    return { score, total, percent };
+  }, [chart]);
+}
+
+function useShenSha(chart: Chart) {
+  return useMemo(() => {
+    const dayBranch = chart.day.branch as Branch | "";
+    const dayStem = chart.day.stem as Stem | "";
+    const branches = [chart.year.branch, chart.month.branch, chart.day.branch, chart.hour.branch].filter(Boolean) as Branch[];
+
+    const shensha: { key: string; label: string; present: boolean; where?: Branch }[] = [];
+
+    if (dayBranch) {
+      const group = GROUP_OF_DAY_BRANCH[dayBranch];
+      const tao = TAOHUA_BY_GROUP[group];
+      const yi = YIMA_BY_GROUP[group];
+      const jiang = JIANGXING_BY_GROUP[group];
+      shensha.push({ key: "taohua", label: "桃花", present: branches.includes(tao), where: tao });
+      shensha.push({ key: "yima", label: "驿马", present: branches.includes(yi), where: yi });
+      shensha.push({ key: "jiangxing", label: "将星", present: branches.includes(jiang), where: jiang });
+    }
+
+    if (dayStem) {
+      const nobles = TIAN_YI_GUI_REN[dayStem];
+      const hasNoble = nobles.some((b) => branches.includes(b));
+      // 标注出现在哪些支
+      const where = nobles.find((b) => branches.includes(b));
+      shensha.push({ key: "tianyi", label: "天乙贵人", present: hasNoble, where });
+    }
+
+    return shensha;
+  }, [chart]);
+}
+
+function interpretFiveElements(percent: Record<"木" | "火" | "土" | "金" | "水", number>) {
+  // 找最强与最弱
+  const entries = Object.entries(percent) as Array<["木" | "火" | "土" | "金" | "水", number]>;
+  const strongest = entries.reduce((a, b) => (b[1] > a[1] ? b : a));
+  const weakest = entries.reduce((a, b) => (b[1] < a[1] ? b : a));
+
+  const advice: Record<string, string> = {
+    "木": "木旺：适合发展教育、文化、设计与品牌；注意情绪与肝胆，宜亲近自然。",
+    "火": "火旺：热情执行力强，适合市场、公关、娱乐；注意急躁，作息规律。",
+    "土": "土旺：稳重与组织力强，适合地产、金融、管理；注意消化脾胃，避免过度保守。",
+    "金": "金旺：决断与规则意识强，适合法律、金属、科技；注意僵硬与呼吸系统。",
+    "水": "水旺：智慧流动，适合咨询、贸易、物流、信息；注意犹豫与肾水亏虚。",
+  };
+
+  const remedy: Record<string, string> = {
+    "木": "补木：多绿色、东向、亲近树木；行业可取教育/品牌/园艺。",
+    "火": "补火：多红色、南向、光照；行业可取能源/传播/餐饮。",
+    "土": "补土：多黄色、居中、规律作息；行业可取地产/仓储/财务。",
+    "金": "补金：多白色、西向、金属饰物；行业可取法律/财会/制造。",
+    "水": "补水：多黑蓝色、北向、亲水活动；行业可取贸易/航运/信息。",
+  };
+
+  return {
+    strongest,
+    weakest,
+    text:
+      `五行比例（%）：木${percent["木"].toFixed(0)}、火${percent["火"].toFixed(0)}、土${percent["土"].toFixed(0)}、金${percent["金"].toFixed(0)}、水${percent["水"].toFixed(0)}。` +
+      `\n偏旺：${strongest[0]}。${advice[strongest[0]]}` +
+      `\n偏弱：${weakest[0]}。${remedy[weakest[0]]}`,
+  };
+}
+
+function interpretShenSha(list: ReturnType<typeof useShenSha>) {
+  const have = list.filter((x) => x.present);
+  const missing = list.filter((x) => !x.present);
+  const notes: Record<string, string> = {
+    桃花: "人缘魅力、艺术审美增强；若过旺需自律，避免情感纠缠。",
+    驿马: "多动迁差旅，适合外出发展、跨城跨国机会。",
+    将星: "领导力、掌控力强，宜居中协调、带团队。",
+    天乙贵人: "遇贵扶持、逢凶化吉；多结善缘、把握合作。",
+  };
+  return {
+    have,
+    missing,
+    text: have.length
+      ? `出现的神煞：` + have.map((x) => `${x.label}(${x.where})`).join("、") +
+        "。" + have.map((x) => notes[x.label]).join("")
+      : "当前常用神煞未见显著入局（桃花/驿马/将星/天乙贵人）。亦可结合大运流年另论。",
+  };
+}
+
+export default function BaZiShenShaApp() {
+  const [name, setName] = useState("");
+  const [gender, setGender] = useState<"男" | "女" | "">("");
+  const [chart, setChart] = useState<Chart>(initialChart);
+  const [calced, setCalced] = useState(false);
+
+  const { score, percent } = useFiveElementScore(chart);
+  const shensha = useShenSha(chart);
+  const wuXingText = interpretFiveElements(percent);
+  const shenShaText = interpretShenSha(shensha);
+
+  const elements: Array<{ key: "木" | "火" | "土" | "金" | "水"; label: string }> = [
+    { key: "木", label: "木" },
+    { key: "火", label: "火" },
+    { key: "土", label: "土" },
+    { key: "金", label: "金" },
+    { key: "水", label: "水" },
+  ];
+
+  const pillarCard = (
+    title: string,
+    pillarKey: keyof Chart,
+    value: Pillar,
+    setValue: (p: Pillar) => void
+  ) => (
+    <div className="rounded-2xl border bg-white p-4 shadow-sm">
+      <h3 className="mb-3 text-lg font-semibold">{title}</h3>
+      <div className="grid grid-cols-2 gap-3">
+        <SelectBox
+          label="天干"
+          value={value.stem}
+          onChange={(v) => setValue({ ...value, stem: v as Stem | "" })}
+          options={STEMS}
+          placeholder="选天干"
+        />
+        <SelectBox
+          label="地支"
+          value={value.branch}
+          onChange={(v) => setValue({ ...value, branch: v as Branch | "" })}
+          options={BRANCHES}
+          placeholder="选地支"
+        />
+      </div>
+      {value.stem ? (
+        <div className="mt-3 text-sm text-slate-600">
+          <div>五行：{STEM_ELEMENT[value.stem as Stem]}（{STEM_YINYANG[value.stem as Stem]}）</div>
+        </div>
+      ) : null}
+    </div>
+  );
+
+  const resultPanel = (
+    <div className="grid gap-4 md:grid-cols-2">
+      <div className="rounded-2xl border bg-white p-5 shadow-sm">
+        <h3 className="mb-2 text-lg font-semibold">五行力量分析</h3>
+        <div className="mt-2 grid grid-cols-5 gap-3 text-center">
+          {elements.map(({ key, label }) => (
+            <div key={key} className="rounded-xl border p-3">
+              <div className="text-2xl font-bold">{percent[key].toFixed(0)}%</div>
+              <div className="text-sm text-slate-600">{label}</div>
+            </div>
+          ))}
+        </div>
+        <p className="mt-3 whitespace-pre-wrap text-sm text-slate-700">{wuXingText.text}</p>
+      </div>
+
+      <div className="rounded-2xl border bg-white p-5 shadow-sm">
+        <h3 className="mb-2 text-lg font-semibold">神煞入局</h3>
+        <div className="flex flex-wrap gap-2">
+          {shensha.map((s) => (
+            <span
+              key={s.key}
+              className={`rounded-full px-3 py-1 text-sm ${
+                s.present ? "border bg-green-50 text-green-700" : "border bg-slate-50 text-slate-500"
+              }`}
+              title={s.where ? `对应地支：${s.where}` : ""}
+            >
+              {s.label}{s.where ? `·${s.where}` : ""}
+            </span>
+          ))}
+        </div>
+        <p className="mt-3 text-sm text-slate-700">{shenShaText.text}</p>
+      </div>
+
+      <div className="rounded-2xl border bg-white p-5 shadow-sm md:col-span-2">
+        <h3 className="mb-2 text-lg font-semibold">综合人生解读（简版）</h3>
+        <ul className="list-disc space-y-2 pl-5 text-sm text-slate-700">
+          <li>
+            <span className="font-medium">日主（以日干为核心）：</span>
+            {chart.day.stem
+              ? ` ${chart.day.stem}（${STEM_YINYANG[chart.day.stem as Stem]}${STEM_ELEMENT[chart.day.stem as Stem]}）— 该类型日主常见人格基调与处世方式可参考 ${STEM_ELEMENT[chart.day.stem as Stem]} 行特质。`
+              : " 请选择日柱天干。"}
+          </li>
+          <li>
+            <span className="font-medium">格局倾向：</span>
+            {` 以五行强弱衡量取向，偏${wuXingText.strongest[0]}，宜发挥其长处；同时补${wuXingText.weakest[0]}，形成动态平衡。`}
+          </li>
+          <li>
+            <span className="font-medium">事业建议：</span>
+            {` 优先选择能用到“${wuXingText.strongest[0]}”属性的岗位/赛道；必要时以“${wuXingText.weakest[0]}”相关习惯或资源作补充。`}
+          </li>
+          <li>
+            <span className="font-medium">情感与人际：</span>
+            {` ${shensha.find((s) => s.key === "taohua")?.present ? "桃花星动，人缘佳但需自律；" : "桃花不显，可走踏实路线、以稳定吸引。"}`}
+            {` ${shensha.find((s) => s.key === "tianyi")?.present ? "贵人助力可多与长辈/专家结缘。" : "宜主动求助、多结善缘以弥补贵人运。"}`}
+          </li>
+          <li>
+            <span className="font-medium">流动与成长：</span>
+            {` ${shensha.find((s) => s.key === "yima")?.present ? "驿马入局，利出差、转岗、跨城跨国。" : "静中求进，阶段性深耕更佳。"}`}
+          </li>
+        </ul>
+        <p className="mt-3 text-xs text-slate-500">
+          注：本工具为学习/娱乐用途，算法为常见入门规则近似；严谨排盘请结合专业排盘（阳历/农历换算、真太阳时、节气月柱、十神格局、大运流年等）。
+        </p>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-slate-50 p-5 md:p-8">
+      <div className="mx-auto max-w-5xl">
+        <header className="mb-6 flex flex-col gap-2">
+          <h1 className="text-2xl font-bold">八字 · 神煞 · 五行 在线小工具</h1>
+          <p className="text-sm text-slate-600">
+            请输入四柱（年/月/日/时）的天干地支。若你只有出生日期时间，也可先用其他排盘工具得到四柱再填入。
+          </p>
+        </header>
+
+        {/* Input Panel */}
+        <div className="mb-6 rounded-2xl border bg-white p-5 shadow-sm">
+          <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div className="flex flex-col gap-1">
+              <label className="text-sm text-slate-600">姓名（可选）</label>
+              <input
+                className="rounded-xl border px-3 py-2 shadow-sm outline-none focus:ring-2"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="例如：张三"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-sm text-slate-600">性别（可选）</label>
+              <select
+                className="rounded-xl border px-3 py-2 shadow-sm outline-none focus:ring-2"
+                value={gender}
+                onChange={(e) => setGender(e.target.value as any)}
+              >
+                <option value="">未选择</option>
+                <option value="男">男</option>
+                <option value="女">女</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            {pillarCard(
+              "年柱",
+              "year",
+              chart.year,
+              (p) => setChart((c) => ({ ...c, year: p }))
+            )}
+            {pillarCard(
+              "月柱",
+              "month",
+              chart.month,
+              (p) => setChart((c) => ({ ...c, month: p }))
+            )}
+            {pillarCard(
+              "日柱",
+              "day",
+              chart.day,
+              (p) => setChart((c) => ({ ...c, day: p }))
+            )}
+            {pillarCard(
+              "时柱",
+              "hour",
+              chart.hour,
+              (p) => setChart((c) => ({ ...c, hour: p }))
+            )}
+          </div>
+
+          <div className="mt-5 flex items-center gap-3">
+            <button
+              onClick={() => setCalced(true)}
+              className="rounded-2xl border bg-black px-5 py-2 text-white shadow-sm hover:opacity-90"
+            >
+              计算
+            </button>
+            <button
+              onClick={() => {
+                setChart(initialChart);
+                setCalced(false);
+              }}
+              className="rounded-2xl border px-5 py-2 shadow-sm hover:bg-slate-50"
+            >
+              重置
+            </button>
+          </div>
+        </div>
+
+        {calced ? resultPanel : (
+          <div className="rounded-2xl border bg-white p-6 text-sm text-slate-600 shadow-sm">
+            填好四柱后点击“计算”，即可看到五行比例与常用神煞入局，以及一段简要的人生解读建议。
+          </div>
+        )}
+
+        <footer className="mt-8 text-center text-xs text-slate-500">
+          © {new Date().getFullYear()} BaZi Helper · 仅供学习研究
+        </footer>
+      </div>
+    </div>
+  );
+}
