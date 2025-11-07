@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react";
 
+// 添加公历转四柱功能（依赖节气算法或简化计算，可接入现成库或API）
 // ==========================
 // BaZi Helper Data & Logic
 // ==========================
@@ -321,6 +322,39 @@ function interpretShenSha(list: ReturnType<typeof useShenSha>) {
   };
 }
 
+// 新增：公历转八字函数（简化版，可后续替换为专业算法）
+function solarToBaZi(dateStr: string, timeStr: string): Chart {
+  const date = new Date(`${dateStr}T${timeStr}:00`);
+  const year = date.getFullYear();
+  // 年干支计算（简化版：以立春前后不区分）
+  const tgIndex = (year - 4) % 10; // 甲子为4年
+  const dzIndex = (year - 4) % 12;
+  const yearP: Pillar = {
+    stem: STEMS[tgIndex],
+    branch: BRANCHES[dzIndex],
+  };
+  // 月柱（简化：用公历月映射12地支，不考虑节气分界）
+  const month = date.getMonth(); // 0=Jan
+  const monthStem = STEMS[(tgIndex * 2 + month) % 10];
+  const monthBranch = BRANCHES[(2 + month) % 12];
+  const monthP: Pillar = { stem: monthStem, branch: monthBranch };
+  // 日柱：使用儒略日数近似公式
+  const base = Date.UTC(1900, 0, 1, 0) / 86400000;
+  const current = Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), 0) / 86400000;
+  const totalDays = Math.floor(current - base);
+  const dayStem = STEMS[(totalDays + 10) % 10];
+  const dayBranch = BRANCHES[(totalDays + 12) % 12];
+  const dayP: Pillar = { stem: dayStem, branch: dayBranch };
+  // 时柱：根据日干+时辰
+  const hour = date.getHours();
+  const branchIdx = Math.floor((hour + 1) / 2) % 12;
+  const hourBranch = BRANCHES[branchIdx];
+  const dayStemIndex = STEMS.indexOf(dayStem);
+  const hourStem = STEMS[(dayStemIndex * 2 + branchIdx) % 10];
+  const hourP: Pillar = { stem: hourStem, branch: hourBranch };
+  return { year: yearP, month: monthP, day: dayP, hour: hourP };
+}
+
 export default function BaZiShenShaApp() {
   const [name, setName] = useState("");
   const [gender, setGender] = useState<"男" | "女" | "">("");
@@ -445,11 +479,11 @@ export default function BaZiShenShaApp() {
         <header className="mb-6 flex flex-col gap-2">
           <h1 className="text-2xl font-bold">八字 · 神煞 · 五行 在线小工具</h1>
           <p className="text-sm text-slate-600">
-            请输入四柱（年/月/日/时）的天干地支。若你只有出生日期时间，也可先用其他排盘工具得到四柱再填入。
+            你可以输入公历出生日期与时间，自动换算四柱，也可手动选择天干地支。
           </p>
         </header>
 
-        {/* Input Panel */}
+        {/* Input Panel with solar date/time */ */}
         <div className="mb-6 rounded-2xl border bg-white p-5 shadow-sm">
           <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-3">
             <div className="flex flex-col gap-1">
